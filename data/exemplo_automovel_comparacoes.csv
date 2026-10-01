@@ -1,0 +1,11 @@
+﻿Decisor;Tipo;Qualidade;Preço;Prazo de entrega;Capacidade tecnológica;Sustentabilidade ambiental;Estabilidade financeira
+Diretora de Compras;BO;2;1;2;4;6;3
+Diretora de Compras;OW;3;6;3;2;1;2
+Engenheiro de Qualidade;BO;1;3;3;2;5;4
+Engenheiro de Qualidade;OW;5;2;2;3;1;2
+Gestor de Produção;BO;2;3;1;3;7;4
+Gestor de Produção;OW;4;3;7;2;1;2
+Responsável de Sustentabilidade;BO;2;6;4;3;1;4
+Responsável de Sustentabilidade;OW;4;1;2;2;6;2
+Diretor Financeiro;BO;2;2;3;4;6;1
+Diretor Financeiro;OW;3;4;2;2;1;6

@@ -1,0 +1,7 @@
+﻿Decisor;Tipo;Custo;Qualidade;Sustentabilidade;Prazo
+Especialista 1;BO;3;1;4;7
+Especialista 1;OW;3;7;2;1
+Especialista 2;BO;2;1;8;4
+Especialista 2;OW;5;8;1;3
+Especialista 3;BO;1;2;5;6
+Especialista 3;OW;6;4;2;1
