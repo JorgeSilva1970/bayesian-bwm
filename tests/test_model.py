@@ -127,3 +127,58 @@ def test_all_examples_are_valid(name):
     errors, warnings, _ = D.validate(ex["bo"], ex["ow"])
     assert not errors and not warnings
     assert list(ex["alt"].columns) == ex["criteria"]["Critério"].tolist()
+
+
+# --- Modelos, leitura de ficheiros e leitura por setor ----------------------
+
+import io as _io
+import json as _json
+
+from bwm import ai as AI
+from bwm import templates as T
+
+
+class _Up(_io.BytesIO):
+    def __init__(self, data, name):
+        super().__init__(data)
+        self.name = name
+
+    def getvalue(self):
+        return super().getvalue()
+
+
+@pytest.mark.parametrize("name", list(D.EXAMPLES))
+def test_excel_template_round_trip(name):
+    ex = D.example_case(name)
+    meta = {"title": ex["title"], "sector": ex["sector"], "context": ex["context"]}
+    xl = T.excel_template(ex["criteria"], ex["dms"], ex["bo"], ex["ow"], ex["alt"], meta)
+    out = D.read_uploaded(_Up(xl, "m.xlsx"))
+    assert np.allclose(out["bo"].values, ex["bo"].values)
+    assert np.allclose(out["ow"].values, ex["ow"].values)
+    assert list(out["criteria"]["Unidade"]) == list(ex["criteria"]["Unidade"])
+    assert out["meta"]["sector"] == ex["sector"]
+    assert np.allclose(out["alt"].values.astype(float), ex["alt"].values)
+
+
+def test_blank_template_reads_without_alternatives():
+    xl = T.excel_template(D.industry_criteria_df("Energia"), D.default_dm_df(2))
+    out = D.read_uploaded(_Up(xl, "b.xlsx"))
+    assert out["bo"].shape == (2, 6) and "alt" not in out
+
+
+def test_questionnaire_is_docx():
+    ex = D.example_case()
+    assert T.questionnaire_docx(ex["criteria"], {"title": "x"})[:2] == b"PK"
+
+
+def test_ai_payload_is_json_and_report_includes_reading(example_result):
+    ex, res = example_result
+    types = dict(zip(ex["criteria"]["Critério"], ex["criteria"]["Tipo"]))
+    meta = {"title": ex["title"], "sector": "Setor X", "context": ex["context"], "criteria_df": ex["criteria"],
+            "units": dict(zip(ex["criteria"]["Critério"], ex["criteria"]["Unidade"])),
+            "ai_text": "### Título\n- ponto **forte**"}
+    b = R.build_bundle(res, ex["bo"], ex["ow"], meta, ex["alt"], types)
+    _json.dumps(AI.build_payload(b), ensure_ascii=False)
+    html_ = R.html_report(b, offline=False).decode()
+    assert "Leitura para o setor" in html_ and "<b>forte</b>" in html_ and "Setor X" in html_
+    assert R.docx_report(b)[:2] == b"PK"

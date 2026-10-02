@@ -47,6 +47,65 @@ METHOD_TEXT = [
 ]
 
 
+def _md_inline(t: str) -> str:
+    import re
+    t = html.escape(t)
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
+
+
+def md_to_html(md: str) -> str:
+    """Conversor mínimo de Markdown (títulos, listas, negrito, parágrafos) para o relatório HTML."""
+    out, in_list = [], False
+    for line in md.splitlines():
+        s = line.strip()
+        if s.startswith(("- ", "* ")):
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            out.append(f"<li>{_md_inline(s[2:])}</li>")
+            continue
+        if in_list:
+            out.append("</ul>")
+            in_list = False
+        if s.startswith("#"):
+            out.append(f"<h3>{_md_inline(s.lstrip('#').strip())}</h3>")
+        elif s:
+            out.append(f"<p>{_md_inline(s)}</p>")
+    if in_list:
+        out.append("</ul>")
+    return "".join(out)
+
+
+def md_to_docx(doc, md: str):
+    import re
+    for line in md.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith("#"):
+            doc.add_heading(s.lstrip("#").strip(), 2)
+            continue
+        style = "List Bullet" if s.startswith(("- ", "* ")) else None
+        text = s[2:] if style else s
+        p = doc.add_paragraph(style=style)
+        for k, part in enumerate(re.split(r"\*\*(.+?)\*\*", text)):
+            run = p.add_run(part)
+            run.bold = k % 2 == 1
+
+
+def _sector(meta) -> str:
+    return meta.get("sector") or meta.get("industry", "")
+
+
+def _alt_with_units(alt, meta):
+    units = meta.get("units", {}) or {}
+    types = meta.get("types", {}) or {}
+    df = alt.copy()
+    df.columns = [f"{c} ({'↑' if types.get(c, 'Benefício') == 'Benefício' else '↓'}"
+                  + (f" {units[c]}" if units.get(c) else "") + ")" for c in df.columns]
+    return df
+
+
 def _fmt_df(df: pd.DataFrame, digits: int = 3) -> pd.DataFrame:
     out = df.copy()
     for c in out.columns:
@@ -60,7 +119,7 @@ def build_bundle(res, bo, ow, meta, alt=None, types=None, method="TOPSIS", v=0.5
     cons = A.consistency_table(bo, ow)
     alt_res = A.alternatives_analysis(res, alt, types or {}, v) if alt is not None and len(alt) else None
     return {
-        "meta": meta,
+        "meta": {**meta, "types": types or {}},
         "res": res,
         "bo": bo,
         "ow": ow,
@@ -130,7 +189,7 @@ def html_report(b, offline: bool = True) -> bytes:
              f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
              f"<title>Relatório Bayesian BWM — {e(meta['title'])}</title><style>{_CSS}</style></head><body><main>"]
     parts.append(f"<header><div class='meta'>Relatório Bayesian Best-Worst Method</div>"
-                 f"<h1>{e(meta['title'])}</h1><div class='meta'>Setor: {e(meta['industry'])} &nbsp;|&nbsp; "
+                 f"<h1>{e(meta['title'])}</h1><div class='meta'>Setor: {e(_sector(meta))} &nbsp;|&nbsp; "
                  f"Gerado em {datetime.now():%d/%m/%Y %H:%M}</div></header>")
     if meta.get("context"):
         parts.append(f"<p>{e(meta['context'])}</p>")
@@ -142,6 +201,10 @@ def html_report(b, offline: bool = True) -> bytes:
         + f" <b>{e(b['chain'][-1][1])}</b></p>" if b["chain"] else "")
     parts.append("<p class='cap'>Os números entre os critérios são a probabilidade de o critério à esquerda "
                  "ser mais importante do que o seguinte.</p>")
+    if meta.get("ai_text"):
+        parts.append("<h2>Leitura para o setor</h2><div class='box'>" + md_to_html(meta["ai_text"])
+                     + "<p class='cap'>Texto redigido com apoio de IA (Claude) a partir dos resultados calculados "
+                     "pela aplicação. Deve ser revisto por quem conhece a organização.</p></div>")
 
     parts.append("<h2>1. Dados de entrada</h2>")
     parts.append(f"<p>{len(res.criteria)} critérios e {len(res.decision_makers)} decisores.</p>")
@@ -181,7 +244,7 @@ def html_report(b, offline: bool = True) -> bytes:
         parts.append("<h2>6. Avaliação das alternativas</h2>")
         parts.append(f"<p>Método principal: <b>{mth}</b>. {e(RK.METHOD_INFO[mth])} Cada método é aplicado a "
                      "todas as amostras dos pesos, o que propaga a incerteza para o ranking final.</p>")
-        parts.append("<h3>Desempenho original</h3>" + _tbl(b["alt_raw"], 2, index=True))
+        parts.append("<h3>Desempenho original</h3>" + _tbl(_alt_with_units(b["alt_raw"], meta), 2, index=True))
         parts.append(f"<h3>Resultado — {mth}</h3>" + _tbl(md["table"]))
         parts.append(_fig(C.alternatives_bar(ar["names"], md["raw"], md["metric"], mth == "VIKOR", mth), first))
         parts.append("<h3>Probabilidade de cada posição</h3>" + _tbl(md["rank_prob"], 2, index=True))
@@ -250,7 +313,7 @@ def docx_report(b) -> bytes:
 
     h = doc.add_heading(meta["title"], 0)
     h.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    p = doc.add_paragraph(f"Relatório Bayesian Best-Worst Method  |  Setor: {meta['industry']}  |  "
+    p = doc.add_paragraph(f"Relatório Bayesian Best-Worst Method  |  Setor: {_sector(meta)}  |  "
                           f"{datetime.now():%d/%m/%Y}")
     p.runs[0].font.color.rgb = RGBColor(0x4B, 0x5B, 0x56)
     if meta.get("context"):
@@ -262,6 +325,14 @@ def docx_report(b) -> bytes:
     if b["chain"]:
         doc.add_paragraph("Ranking credal: " + "  ›  ".join(
             f"{a} ({p:.2f})" for a, _, p in b["chain"]) + f"  ›  {b['chain'][-1][1]}")
+
+    if meta.get("ai_text"):
+        doc.add_heading("Leitura para o setor", 1)
+        md_to_docx(doc, meta["ai_text"])
+        q = doc.add_paragraph("Texto redigido com apoio de IA (Claude) a partir dos resultados calculados pela "
+                              "aplicação. Deve ser revisto por quem conhece a organização.")
+        q.runs[0].italic = True
+        q.runs[0].font.size = Pt(8.5)
 
     doc.add_heading("1. Dados de entrada", 1)
     if meta.get("criteria_df") is not None:
@@ -295,7 +366,7 @@ def docx_report(b) -> bytes:
         md = ar["methods"][mth]
         doc.add_heading("6. Avaliação das alternativas", 1)
         doc.add_paragraph(f"Método principal: {mth}. {RK.METHOD_INFO[mth]}")
-        _doc_table(doc, b["alt_raw"], 2, index=True)
+        _doc_table(doc, _alt_with_units(b["alt_raw"], meta), 2, index=True)
         doc.add_heading(f"Resultado — {mth}", 2)
         _doc_table(doc, md["table"])
         doc.add_picture(io.BytesIO(C.mpl_alternatives(ar["names"], md["raw"], md["metric"], mth == "VIKOR")),
@@ -332,6 +403,9 @@ def excel_report(b) -> bytes:
     res = b["res"]
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
         pd.DataFrame({"Síntese": b["text"]}).to_excel(xw, sheet_name="Sintese", index=False)
+        if b["meta"].get("ai_text"):
+            pd.DataFrame({"Leitura para o setor (IA)": b["meta"]["ai_text"].splitlines()}) \
+                .to_excel(xw, sheet_name="Leitura setor", index=False)
         b["weights"].to_excel(xw, sheet_name="Pesos agregados", index=False)
         b["credal"].to_excel(xw, sheet_name="Ranking credal")
         pd.DataFrame(res.rank_probabilities(), index=res.criteria,

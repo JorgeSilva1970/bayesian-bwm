@@ -13,12 +13,16 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+import os
+
+from bwm import ai as AI
 from bwm import analysis as A
 from bwm import charts as C
 from bwm import data as D
 from bwm import learn as L
 from bwm import ranking as RK
 from bwm import report as R
+from bwm import templates as T
 from bwm.model import bayesian_bwm
 
 st.set_page_config(page_title="Bayesian BWM Studio", page_icon="⚖️", layout="wide")
@@ -45,8 +49,12 @@ def _empty_matrix(dms, criteria):
     return pd.DataFrame(np.nan, index=pd.Index(dms, name="Decisor"), columns=criteria, dtype=float)
 
 
-def set_inputs(criteria_df, dms_df, bo=None, ow=None, alt=None, title=None, context=None):
-    ss.crit_base = criteria_df.reset_index(drop=True)
+def set_inputs(criteria_df, dms_df, bo=None, ow=None, alt=None, title=None, context=None, sector=None):
+    criteria_df = criteria_df.copy()
+    for col in D.CRIT_COLS:
+        if col not in criteria_df:
+            criteria_df[col] = "" if col != "Tipo" else D.BENEFICIO
+    ss.crit_base = criteria_df[D.CRIT_COLS].fillna("").reset_index(drop=True)
     ss.dm_base = dms_df.reset_index(drop=True)
     crit = ss.crit_base["Critério"].tolist()
     dms = ss.dm_base["Decisor"].tolist()
@@ -62,6 +70,9 @@ def set_inputs(criteria_df, dms_df, bo=None, ow=None, alt=None, title=None, cont
         ss.dec_title = title
     if context is not None:
         ss.dec_context = context
+    if sector is not None:
+        ss.sector_label = sector
+    ss.pop("ai_reading", None)
     for n in ("crit", "dm", "mat", "alt"):
         _bump(n)
     ss.pop("result", None)
@@ -70,16 +81,16 @@ def set_inputs(criteria_df, dms_df, bo=None, ow=None, alt=None, title=None, cont
 def load_example():
     ex = D.example_case(ss.get("example_name", D.DEFAULT_EXAMPLE))
     ss.industry = ex["industry"]
-    set_inputs(ex["criteria"], ex["dms"], ex["bo"], ex["ow"], ex["alt"], ex["title"], ex["context"])
-    ss.alt_units = ex["alt_units"]
+    set_inputs(ex["criteria"], ex["dms"], ex["bo"], ex["ow"], ex["alt"], ex["title"], ex["context"],
+               ex["sector"])
 
 
 def on_industry_change():
     ind = ss.industry
     ss.source = "Introdução manual"
     dms = ss.get("dm_base", D.default_dm_df())
-    set_inputs(D.industry_criteria_df(ind), dms, title=D.INDUSTRIES[ind]["decisao"], context="")
-    ss.alt_units = {}
+    set_inputs(D.industry_criteria_df(ind), dms, title=D.INDUSTRIES[ind]["decisao"], context="",
+               sector="" if ind == "Personalizado" else ind)
 
 
 def on_source_change():
@@ -119,37 +130,41 @@ with st.sidebar:
                           "didático pequeno. Os dados são fictícios, construídos para fins pedagógicos.")
 
     if ss.source == "Carregar ficheiro":
-        up = st.file_uploader("Ficheiro de comparações (CSV ou Excel)", type=["csv", "xlsx", "xls"],
-                              help="Duas linhas por decisor: Tipo = BO e Tipo = OW. "
-                                   "No Excel pode incluir as folhas Criterios e Alternativas.")
+        st.caption("Use o **modelo Excel** em «📋 Modelos e formulários» (mais abaixo): já traz as folhas, "
+                   "colunas e validações corretas.")
+        up = st.file_uploader("Ficheiro de dados (Excel recomendado, ou CSV)", type=["csv", "xlsx", "xls"],
+                              help="Excel: folhas Projeto, Criterios, Decisores, Comparacoes e Alternativas. "
+                                   "CSV: só comparações, duas linhas por decisor (Tipo = BO e OW).")
         if up is not None and ss.get("last_upload") != (up.name, up.size):
             try:
                 parsed = D.read_uploaded(up)
                 bo, ow = parsed["bo"], parsed["ow"]
                 crit_df = parsed.get("criteria")
-                if crit_df is None or list(crit_df["Critério"]) != list(bo.columns):
-                    crit_df = pd.DataFrame({"Critério": bo.columns, "Tipo": D.BENEFICIO, "Descrição": ""})
-                dms_df = pd.DataFrame({"Decisor": bo.index, "Função": ""})
+                if crit_df is not None:
+                    missing = [c for c in bo.columns if c not in set(crit_df["Critério"])]
+                    if missing:
+                        st.warning(f"Critérios sem linha na folha Criterios (assumidos como Benefício): {missing}")
+                    crit_df = crit_df.set_index("Critério").reindex(bo.columns).reset_index()
+                    crit_df["Tipo"] = crit_df["Tipo"].fillna(D.BENEFICIO)
+                else:
+                    crit_df = pd.DataFrame({"Critério": bo.columns, "Tipo": D.BENEFICIO, "Unidade": "",
+                                            "Descrição": ""})
+                fun = {}
+                if parsed.get("dms") is not None:
+                    fun = dict(zip(parsed["dms"]["Decisor"], parsed["dms"]["Função"]))
+                dms_df = pd.DataFrame({"Decisor": bo.index, "Função": [fun.get(d, "") for d in bo.index]})
+                pm = parsed.get("meta", {})
                 alt = parsed.get("alt")
                 if alt is not None:
                     alt = alt.reindex(columns=bo.columns)
                     alt.index.name = "Alternativa"
-                set_inputs(crit_df, dms_df, bo, ow, alt, title=f"Análise de {up.name}", context="")
+                set_inputs(crit_df, dms_df, bo, ow, alt, title=pm.get("title") or f"Análise de {up.name}",
+                           context=pm.get("context", ""), sector=pm.get("sector", ""))
                 ss.last_upload = (up.name, up.size)
                 st.success(f"Lidos {bo.shape[0]} decisores e {bo.shape[1]} critérios.")
                 st.rerun()
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Não foi possível ler o ficheiro: {exc}")
-        crit_now = ss.crit_base["Critério"].tolist()
-        dms_now = ss.dm_base["Decisor"].tolist()
-        st.download_button("Modelo em branco (Excel)", D.template_excel(crit_now, dms_now),
-                           "modelo_bwm.xlsx", width="stretch",
-                           help="Modelo com os critérios e decisores atuais, pronto a preencher.")
-        st.download_button("Ficheiro do caso exemplo (Excel)", D.template_excel([], [], example=ss.get("example_name", D.DEFAULT_EXAMPLE)),
-                           "exemplo_bwm.xlsx", width="stretch")
-        st.download_button("Modelo em branco (CSV)",
-                           D.template_long(crit_now, dms_now).to_csv(index=False, sep=";").encode("utf-8-sig"),
-                           "modelo_bwm.csv", width="stretch")
 
     st.divider()
     with st.expander("⚙️ Parâmetros da estimação", expanded=False):
@@ -175,8 +190,12 @@ c1, c2 = st.columns([2, 3])
 with c1:
     st.text_input("Título da decisão", key="dec_title",
                   help="Aparece no topo do relatório.")
+    st.text_input("Setor / organização", key="sector_label",
+                  placeholder="Ex.: Seguros — gestão de sinistros de acidentes de trabalho",
+                  help="Texto livre. Substitui o setor da lista no relatório e orienta a leitura para o setor "
+                       "feita com IA. Útil para setores que não estão na lista.")
 with c2:
-    st.text_area("Contexto (opcional)", key="dec_context", height=68,
+    st.text_area("Contexto (opcional)", key="dec_context", height=122,
                  help="Descreva o problema de decisão. É incluído no relatório.")
 
 tabs = st.tabs(["1. Critérios e decisores", "2. Comparações", "3. Alternativas",
@@ -201,6 +220,9 @@ with tabs[0]:
                 "Tipo": st.column_config.SelectboxColumn(
                     options=[D.BENEFICIO, D.CUSTO], required=True, default=D.BENEFICIO,
                     help="Benefício: mais é melhor. Custo: menos é melhor. Só é usado na avaliação de alternativas."),
+                "Unidade": st.column_config.TextColumn(
+                    help="Unidade em que as alternativas são medidas (€, dias, %, escala 1-10). "
+                         "Aparece nas ajudas, tabelas e relatórios."),
                 "Descrição": st.column_config.TextColumn(width="large"),
             })
         st.caption("O tipo (benefício/custo) não afeta os pesos: serve apenas para pontuar alternativas.")
@@ -235,6 +257,13 @@ criteria = _clean_names(crit_edit["Critério"])
 dms = _clean_names(dm_edit["Decisor"])
 crit_types = {str(r["Critério"]).strip(): r["Tipo"] for _, r in crit_edit.dropna(subset=["Critério"]).iterrows()}
 crit_df_now = crit_edit.dropna(subset=["Critério"]).reset_index(drop=True)
+crit_df_now["Critério"] = crit_df_now["Critério"].astype(str).str.strip()
+def _txt(v) -> str:
+    return "" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v).strip()
+
+
+crit_units = {r["Critério"]: _txt(r.get("Unidade")) for _, r in crit_df_now.iterrows()}
+dm_functions = {_txt(r["Decisor"]): _txt(r.get("Função")) for _, r in dm_edit.dropna(subset=["Decisor"]).iterrows()}
 
 
 def _reshape(prev: pd.DataFrame, rows, cols) -> pd.DataFrame:
@@ -312,6 +341,45 @@ with tabs[1]:
 bo_cur = ss.bo_last.reindex(index=dms, columns=criteria)
 ow_cur = ss.ow_last.reindex(index=dms, columns=criteria)
 
+
+def _meta_base() -> dict:
+    return {"title": ss.dec_title or "Análise Bayesian BWM", "industry": ss.industry,
+            "sector": (ss.get("sector_label") or "").strip() or ss.industry, "context": ss.dec_context}
+
+
+# ---------------------------------------------------------------------------
+# Modelos e formulários (barra lateral)
+# ---------------------------------------------------------------------------
+
+with st.sidebar:
+    with st.expander("📋 Modelos e formulários", expanded=ss.source == "Carregar ficheiro"):
+        st.caption("Modelos com as folhas, colunas e validações certas para carregar dados de qualquer setor.")
+        mb = _meta_base()
+        dms_tpl = dm_edit.dropna(subset=["Decisor"])
+        st.download_button(
+            "Modelo Excel — configuração atual", width="stretch",
+            data=T.excel_template(crit_df_now, dms_tpl, bo_cur, ow_cur, ss.alt_base, mb),
+            file_name="modelo_bwm_atual.xlsx",
+            help="Critérios, unidades, decisores e valores que estão agora na app. Ideal para guardar "
+                 "o trabalho ou partilhar e voltar a carregar.")
+        ind = ss.industry
+        st.download_button(
+            f"Modelo Excel em branco — {ind}", width="stretch",
+            data=T.excel_template(D.industry_criteria_df(ind), D.default_dm_df(3), meta={
+                "title": D.INDUSTRIES[ind]["decisao"], "sector": "" if ind == "Personalizado" else ind}),
+            file_name="modelo_bwm_base.xlsx",
+            help="Modelo base com os critérios sugeridos para o setor selecionado. Edite à vontade: pode "
+                 "acrescentar critérios, decisores e alternativas.")
+        st.download_button(
+            "Questionário para decisores (Word)", width="stretch",
+            data=T.questionnaire_docx(crit_df_now, mb), file_name="questionario_decisores_bwm.docx",
+            help="Formulário com os critérios atuais para cada decisor preencher. As respostas transcrevem-se "
+                 "para a folha Comparacoes do modelo Excel.")
+        st.download_button(
+            "Modelo CSV (só comparações)", width="stretch",
+            data=D.template_long(criteria, dms).to_csv(index=False, sep=";").encode("utf-8-sig"),
+            file_name="modelo_bwm_comparacoes.csv")
+
 # ---------------------------------------------------------------------------
 # 3. Alternativas (opcional)
 # ---------------------------------------------------------------------------
@@ -349,7 +417,7 @@ with tabs[2]:
                     st.rerun()
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Não foi possível ler o ficheiro: {exc}")
-        units = ss.get("alt_units", {})
+        units = crit_units
         alt_cfg = {c: st.column_config.NumberColumn(
             f"{c} ({'↑' if crit_types.get(c) == D.BENEFICIO else '↓'})",
             help=f"{'Benefício: mais é melhor' if crit_types.get(c) == D.BENEFICIO else 'Custo: menos é melhor'}"
@@ -512,6 +580,34 @@ with tabs[3]:
                 for t in A.interpretation(res, cons, alt_res, ss.alt_method):
                     st.markdown(f"- {t}")
 
+            with st.container(border=True):
+                st.markdown("**Leitura para o setor (IA, opcional)**")
+                api_key = AI.get_api_key(st.secrets if hasattr(st, "secrets") else None)
+                ai_state = ss.get("ai_reading")
+                ai_key = (ss.result["hash"], ss.alt_method, (ss.get("sector_label") or ""), ss.dec_context)
+                if not api_key:
+                    st.caption("Para ativar, defina a variável ANTHROPIC_API_KEY (no Render: Environment; localmente: "
+                               "`.streamlit/secrets.toml`). Os cálculos não dependem disto.")
+                else:
+                    st.caption("O Claude redige uma interpretação adaptada ao setor e ao contexto indicados no topo, "
+                               "usando apenas os resultados calculados aqui. Reveja sempre o texto.")
+                    if st.button("Gerar leitura para o setor", key="ai_btn"):
+                        with st.spinner("A redigir a leitura para o setor…"):
+                            try:
+                                meta_ai = {**_meta_base(), "criteria_df": crit_df_now, "units": crit_units,
+                                           "functions": dm_functions}
+                                b_ai = R.build_bundle(res, bo_r, ow_r, meta_ai, alt_cur if alt_res else None,
+                                                      crit_types, ss.alt_method, float(ss.vikor_v))
+                                ss.ai_reading = {"key": ai_key, "text": AI.sector_reading(b_ai, api_key)}
+                                ai_state = ss.ai_reading
+                            except Exception as exc:  # noqa: BLE001
+                                st.error(f"Não foi possível gerar a leitura: {exc}")
+                if ai_state:
+                    if ai_state["key"] != ai_key:
+                        st.warning("Os resultados ou o contexto mudaram desde que esta leitura foi gerada.")
+                    st.markdown(ai_state["text"])
+                    st.caption("Texto incluído automaticamente nos relatórios (separador 5).")
+
             rt = st.tabs(["Pesos", "Ranking credal", "Decisores", "Consistência", "Alternativas", "Diagnóstico"])
 
             with rt[0]:
@@ -658,8 +754,9 @@ with tabs[4]:
                 "referências.", icon="ℹ️")
         offline = st.checkbox("HTML para uso sem Internet (ficheiro maior, ~5 MB)", value=True,
                               help="Desmarque para um HTML leve que carrega os gráficos a partir da Internet.")
-        meta = {"title": ss.dec_title or "Análise Bayesian BWM", "industry": ss.industry,
-                "context": ss.dec_context, "criteria_df": crit_df_now}
+        meta = {**_meta_base(), "criteria_df": crit_df_now, "units": crit_units, "functions": dm_functions}
+        if ss.get("ai_reading"):
+            meta["ai_text"] = ss.ai_reading["text"]
         bo_r = bo_cur.loc[res.decision_makers, res.criteria]
         ow_r = ow_cur.loc[res.decision_makers, res.criteria]
         try:

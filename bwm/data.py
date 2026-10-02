@@ -150,9 +150,15 @@ INDUSTRIES: dict[str, dict] = {
 }
 
 
+CRIT_COLS = ["Critério", "Tipo", "Unidade", "Descrição"]
+IGNORE_COLS = {"notas", "observacoes", "comentarios", "comentario", "nota"}
+
+
 def industry_criteria_df(industry: str) -> pd.DataFrame:
     rows = INDUSTRIES[industry]["criterios"]
-    return pd.DataFrame(rows, columns=["Critério", "Tipo", "Descrição"])
+    df = pd.DataFrame(rows, columns=["Critério", "Tipo", "Descrição"])
+    df.insert(2, "Unidade", "")
+    return df
 
 
 def default_dm_df(k: int = 3) -> pd.DataFrame:
@@ -167,6 +173,7 @@ def default_dm_df(k: int = 3) -> pd.DataFrame:
 EXAMPLES: dict[str, dict] = {
     "Automóvel — seleção de fornecedores": {
         "industry": "Indústria transformadora / Automóvel",
+        "sector": "Indústria automóvel — compras e cadeia de abastecimento",
         "title": "Seleção de fornecedores de componentes — fábrica de componentes automóveis",
         "context": (
             "Uma fábrica de componentes automóveis precisa de escolher um fornecedor estratégico de peças "
@@ -188,6 +195,7 @@ EXAMPLES: dict[str, dict] = {
     },
     "Retalho — localização de nova loja": {
         "industry": "Retalho e Distribuição",
+        "sector": "Retalho alimentar — expansão da rede de lojas",
         "title": "Localização de uma nova loja de proximidade — cadeia de supermercados",
         "context": (
             "Uma cadeia de supermercados de proximidade vai abrir uma nova loja na área metropolitana e tem "
@@ -212,6 +220,7 @@ EXAMPLES: dict[str, dict] = {
     },
     "Saúde — aquisição de equipamento de ressonância magnética": {
         "industry": "Saúde",
+        "sector": "Saúde — hospital público, serviço de imagiologia",
         "title": "Aquisição de equipamento de ressonância magnética — hospital público",
         "context": (
             "Um hospital vai substituir o equipamento de ressonância magnética e recebeu quatro propostas. "
@@ -234,6 +243,7 @@ EXAMPLES: dict[str, dict] = {
     },
     "Didático — 4 critérios e 3 especialistas": {
         "industry": "Personalizado",
+        "sector": "Exemplo didático — compras",
         "title": "Exemplo didático — escolha de fornecedor com 4 critérios",
         "context": (
             "Exemplo pequeno para aprender o método: três especialistas avaliam custo, qualidade, "
@@ -260,8 +270,10 @@ def example_case(name: str = DEFAULT_EXAMPLE) -> dict:
     e = EXAMPLES[name]
     if "criteria" in e:
         crit = pd.DataFrame(e["criteria"], columns=["Critério", "Tipo", "Descrição"])
+        crit.insert(2, "Unidade", "")
     else:
         crit = industry_criteria_df(e["industry"])
+    crit["Unidade"] = e["units"]
     names = crit["Critério"].tolist()
     dms = pd.DataFrame(e["dms"], columns=["Decisor", "Função"])
     idx = pd.Index(dms["Decisor"], name="Decisor")
@@ -269,7 +281,8 @@ def example_case(name: str = DEFAULT_EXAMPLE) -> dict:
     ow_df = pd.DataFrame(e["ow"], columns=names, index=idx)
     alt = pd.DataFrame(list(e["alt"].values()), columns=names,
                        index=pd.Index(list(e["alt"].keys()), name="Alternativa"))
-    return {"name": name, "industry": e["industry"], "title": e["title"], "context": e["context"],
+    return {"name": name, "industry": e["industry"], "sector": e.get("sector", e["industry"]),
+            "title": e["title"], "context": e["context"],
             "criteria": crit, "dms": dms, "bo": bo_df, "ow": ow_df, "alt": alt,
             "alt_units": dict(zip(names, e["units"]))}
 
@@ -293,37 +306,21 @@ def template_long(criteria: list[str], dms: list[str]) -> pd.DataFrame:
 
 
 def template_excel(criteria: list[str], dms: list[str], example: bool | str = False) -> bytes:
-    buf = io.BytesIO()
+    """Compatibilidade: delega no gerador de modelos formatados (bwm.templates)."""
+    from .templates import excel_template
     if example:
         ex = example_case(example if isinstance(example, str) else DEFAULT_EXAMPLE)
-        comp = to_long(ex["bo"], ex["ow"])
-        crit = ex["criteria"]
-        alt = ex["alt"].reset_index()
-    else:
-        comp = template_long(criteria, dms)
-        crit = pd.DataFrame({"Critério": criteria, "Tipo": [BENEFICIO] * len(criteria),
-                             "Descrição": [""] * len(criteria)})
-        alt = pd.DataFrame(columns=["Alternativa"] + criteria)
-    instr = pd.DataFrame({"Instruções": [
-        "Folha 'Comparacoes': duas linhas por decisor — Tipo=BO (Best-to-Others) e Tipo=OW (Others-to-Worst).",
-        "BO: importância do MELHOR critério face a cada critério (1 = igual, 9 = extremamente mais importante). O melhor critério leva 1.",
-        "OW: importância de cada critério face ao PIOR critério (1..9). O pior critério leva 1.",
-        "O melhor e o pior critério são detetados automaticamente (valor 1 na linha BO e OW, respetivamente).",
-        "Folha 'Criterios' (opcional): Tipo = Benefício (mais é melhor) ou Custo (menos é melhor).",
-        "Folha 'Alternativas' (opcional): desempenho de cada alternativa em cada critério, em unidades naturais.",
-        "Pode acrescentar colunas (critérios) e linhas (decisores/alternativas) livremente.",
-    ]})
-    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
-        comp.to_excel(xw, sheet_name="Comparacoes", index=False)
-        crit.to_excel(xw, sheet_name="Criterios", index=False)
-        alt.to_excel(xw, sheet_name="Alternativas", index=False)
-        instr.to_excel(xw, sheet_name="Instrucoes", index=False)
-    return buf.getvalue()
+        meta = {"title": ex["title"], "sector": ex["sector"], "context": ex["context"]}
+        return excel_template(ex["criteria"], ex["dms"], ex["bo"], ex["ow"], ex["alt"], meta)
+    crit = pd.DataFrame({"Critério": criteria, "Tipo": BENEFICIO, "Unidade": "", "Descrição": ""})
+    return excel_template(crit, pd.DataFrame({"Decisor": dms, "Função": ""}))
 
 
 def _norm(s: str) -> str:
-    return str(s).strip().lower().replace("ç", "c").replace("õ", "o").replace("ã", "a") \
-        .replace("é", "e").replace("í", "i").replace("á", "a").replace("ó", "o")
+    """Normaliza nomes de colunas/folhas: minúsculas, sem acentos nem espaços extra."""
+    import unicodedata
+    t = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
+    return " ".join(t.strip().lower().split())
 
 
 def parse_long(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -332,7 +329,8 @@ def parse_long(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     if "decisor" not in cols or "tipo" not in cols:
         raise ValueError("O ficheiro tem de ter as colunas 'Decisor' e 'Tipo' (BO/OW).")
     dcol, tcol = cols["decisor"], cols["tipo"]
-    crit_cols = [c for c in df.columns if c not in (dcol, tcol)]
+    crit_cols = [c for c in df.columns if c not in (dcol, tcol) and _norm(c) not in IGNORE_COLS
+                 and not str(c).startswith("Unnamed")]
     if len(crit_cols) < 2:
         raise ValueError("São necessárias pelo menos 2 colunas de critérios.")
     df = df.dropna(subset=[dcol]).copy()
@@ -354,23 +352,68 @@ def parse_long(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return bo.apply(pd.to_numeric, errors="coerce"), ow.apply(pd.to_numeric, errors="coerce")
 
 
+def _sheet(sheets: dict, *names):
+    keymap = {_norm(k): k for k in sheets}
+    for n in names:
+        if n in keymap:
+            return sheets[keymap[n]]
+    return None
+
+
 def read_uploaded(file) -> dict:
-    """Lê CSV ou Excel. Excel pode ter as folhas Comparacoes, Criterios e Alternativas."""
+    """
+    Lê CSV ou Excel. No Excel reconhece as folhas:
+    Projeto (Campo | Valor), Criterios, Decisores, Comparacoes e Alternativas.
+    """
     name = file.name.lower()
     out: dict = {}
     if name.endswith((".xlsx", ".xls")):
         sheets = pd.read_excel(file, sheet_name=None)
-        keymap = {_norm(k): k for k in sheets}
-        comp_key = keymap.get("comparacoes") or list(sheets)[0]
-        out["bo"], out["ow"] = parse_long(sheets[comp_key])
-        if "criterios" in keymap:
-            c = sheets[keymap["criterios"]].dropna(how="all")
-            if {"Critério", "Tipo"}.issubset(c.columns):
-                if "Descrição" not in c.columns:
-                    c["Descrição"] = ""
-                out["criteria"] = c[["Critério", "Tipo", "Descrição"]].fillna("")
-        if "alternativas" in keymap:
-            a = sheets[keymap["alternativas"]].dropna(how="all")
+        comp = _sheet(sheets, "comparacoes", "comparacao")
+        if comp is None:
+            comp = next(iter(sheets.values()))
+        out["bo"], out["ow"] = parse_long(comp)
+
+        proj = _sheet(sheets, "projeto", "projecto")
+        if proj is not None and proj.shape[1] >= 2:
+            kv = {_norm(k): ("" if pd.isna(v) else str(v)) for k, v in zip(proj.iloc[:, 0], proj.iloc[:, 1])}
+            out["meta"] = {"title": kv.get("titulo da decisao", kv.get("titulo", "")),
+                           "sector": kv.get("setor / organizacao", kv.get("setor", "")),
+                           "context": kv.get("contexto", "")}
+
+        c = _sheet(sheets, "criterios")
+        if c is not None:
+            c = c.dropna(how="all")
+            cols = {_norm(x): x for x in c.columns}
+            if "criterio" in cols and "tipo" in cols:
+                crit = pd.DataFrame({
+                    "Critério": c[cols["criterio"]].astype(str).str.strip(),
+                    "Tipo": c[cols["tipo"]].fillna(BENEFICIO).astype(str).str.strip().str.capitalize()
+                    .replace({"Beneficio": BENEFICIO}),
+                    "Unidade": c[cols["unidade"]].fillna("").astype(str) if "unidade" in cols else "",
+                    "Descrição": c[cols["descricao"]].fillna("").astype(str) if "descricao" in cols else "",
+                })
+                bad = set(crit["Tipo"]) - {BENEFICIO, CUSTO}
+                if bad:
+                    raise ValueError(f"Folha Criterios: Tipo inválido {sorted(bad)}. Use Benefício ou Custo.")
+                out["criteria"] = crit
+
+        d = _sheet(sheets, "decisores")
+        if d is not None and len(d.dropna(how="all")):
+            d = d.dropna(how="all")
+            cols = {_norm(x): x for x in d.columns}
+            if "decisor" in cols:
+                out["dms"] = pd.DataFrame({
+                    "Decisor": d[cols["decisor"]].astype(str).str.strip(),
+                    "Função": d[cols["funcao"]].fillna("").astype(str) if "funcao" in cols else ""})
+
+        a = _sheet(sheets, "alternativas")
+        if a is not None:
+            a = a.dropna(how="all")
+            a = a[[x for x in a.columns if _norm(x) not in IGNORE_COLS]]
+            a = a[~a.iloc[:, 0].astype(str).str.startswith("(")]          # linha de ajuda do modelo
+            a = a[a.iloc[:, 0].notna() & a.iloc[:, 0].astype(str).str.strip().ne("")]
+            a = a[a.iloc[:, 1:].notna().any(axis=1)]
             if len(a) and a.shape[1] > 1:
                 out["alt"] = a.set_index(a.columns[0])
     else:

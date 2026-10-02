@@ -30,6 +30,36 @@ Energia, Construção, Retalho, Educação, Turismo, Agroalimentar e Personaliza
 
 O caso didático reproduz os dados do exemplo Bayesian BWM + TOPSIS da conversa de referência.
 
+## Modelos e formulários para recolha de dados
+
+Na barra lateral, em **📋 Modelos e formulários**, e na pasta `modelos/`:
+
+| Ficheiro | Para quê |
+|---|---|
+| `modelos/modelo_<setor>.xlsx` | Modelo base por setor, com critérios sugeridos. O `modelo_personalizado.xlsx` serve para qualquer situação. |
+| Modelo Excel — configuração atual | Gerado pela app com os critérios, unidades, decisores e valores que estão no ecrã. |
+| `modelos/questionario_decisores_base.docx` e botão «Questionário para decisores» | Formulário Word para cada decisor preencher (melhor/pior critério, BO e OW, verificação). |
+| Modelo CSV | Só as comparações, para quem prefira CSV. |
+
+O modelo Excel tem 7 folhas: **Instrucoes**, **Projeto** (título, setor/organização, contexto), **Criterios**
+(Critério, Tipo, Unidade, Descrição), **Decisores** (Decisor, Função), **Comparacoes** (Decisor, Tipo BO/OW,
+uma coluna por critério, Notas), **Alternativas** e **Escala**. Inclui listas pendentes (Benefício/Custo,
+BO/OW), validação de valores inteiros de 1 a 9 e destaque automático das células com 1.
+
+Fluxo recomendado: escolher o setor → descarregar o modelo → ajustar critérios → enviar o questionário aos
+decisores → transcrever as respostas para **Comparacoes** → carregar o Excel na app.
+
+## Leitura para o setor com IA (opcional)
+
+O botão **Gerar leitura para o setor** (separador Resultados) envia um resumo dos resultados para a API do
+Claude, com o setor/organização e o contexto escritos no topo da app, e devolve uma interpretação adaptada,
+que passa a constar dos relatórios. Os números são sempre calculados pela app.
+
+- Local: copiar `.streamlit/secrets.toml.example` para `.streamlit/secrets.toml` e colocar a chave
+  (este ficheiro não vai para o GitHub).
+- Render: Environment → `ANTHROPIC_API_KEY` = a sua chave. Opcional: `ANTHROPIC_MODEL`.
+- Sem chave, a app funciona normalmente e o botão não aparece.
+
 ## Estrutura
 
 ```
@@ -41,9 +71,12 @@ bayesian-bwm/
 │   ├── analysis.py         # tabelas de resultados e interpretação automática
 │   ├── ranking.py          # TOPSIS, VIKOR, SAW com Monte Carlo e sensibilidade
 │   ├── learn.py            # conteúdo pedagógico do separador Aprender
+│   ├── templates.py        # modelo Excel com validações e questionário Word
+│   ├── ai.py               # leitura para o setor via API do Claude (opcional)
 │   ├── charts.py           # gráficos Plotly e Matplotlib
 │   └── report.py           # relatórios HTML, Word e Excel
-├── data/                   # ficheiros de exemplo (CSV e Excel)
+├── data/                   # casos exemplo (CSV e Excel)
+├── modelos/                # modelos base por setor e questionário
 ├── tests/test_model.py     # testes automáticos
 ├── .streamlit/config.toml  # tema e configuração do servidor
 ├── .vscode/                # configuração de execução e depuração no VS Code
@@ -100,6 +133,7 @@ Apply.
 | Build Command | `pip install -r requirements.txt` |
 | Start Command | `streamlit run app.py --server.port $PORT --server.address 0.0.0.0` |
 | Environment variable | `PYTHON_VERSION` = `3.12.8` |
+| Environment variable (opcional) | `ANTHROPIC_API_KEY` = a sua chave |
 | Instance type | Free |
 
 Cada `git push` para `main` volta a publicar a app automaticamente. No plano gratuito, a app adormece

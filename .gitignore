@@ -9,3 +9,4 @@ venv/
 relatorio_*.html
 relatorio_*.docx
 resultados_*.xlsx
+.streamlit/secrets.toml
