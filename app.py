@@ -130,6 +130,10 @@ with st.sidebar:
                           "didático pequeno. Os dados são fictícios, construídos para fins pedagógicos.")
 
     if ss.source == "Carregar ficheiro":
+        if ss.get("upload_msg"):
+            st.success(ss.upload_msg)
+        for w_ in ss.get("upload_warnings", []):
+            st.warning(w_)
         st.caption("Use o **modelo Excel** em «📋 Modelos e formulários» (mais abaixo): já traz as folhas, "
                    "colunas e validações corretas.")
         up = st.file_uploader("Ficheiro de dados (Excel recomendado, ou CSV)", type=["csv", "xlsx", "xls"],
@@ -137,31 +141,13 @@ with st.sidebar:
                                    "CSV: só comparações, duas linhas por decisor (Tipo = BO e OW).")
         if up is not None and ss.get("last_upload") != (up.name, up.size):
             try:
-                parsed = D.read_uploaded(up)
-                bo, ow = parsed["bo"], parsed["ow"]
-                crit_df = parsed.get("criteria")
-                if crit_df is not None:
-                    missing = [c for c in bo.columns if c not in set(crit_df["Critério"])]
-                    if missing:
-                        st.warning(f"Critérios sem linha na folha Criterios (assumidos como Benefício): {missing}")
-                    crit_df = crit_df.set_index("Critério").reindex(bo.columns).reset_index()
-                    crit_df["Tipo"] = crit_df["Tipo"].fillna(D.BENEFICIO)
-                else:
-                    crit_df = pd.DataFrame({"Critério": bo.columns, "Tipo": D.BENEFICIO, "Unidade": "",
-                                            "Descrição": ""})
-                fun = {}
-                if parsed.get("dms") is not None:
-                    fun = dict(zip(parsed["dms"]["Decisor"], parsed["dms"]["Função"]))
-                dms_df = pd.DataFrame({"Decisor": bo.index, "Função": [fun.get(d, "") for d in bo.index]})
-                pm = parsed.get("meta", {})
-                alt = parsed.get("alt")
-                if alt is not None:
-                    alt = alt.reindex(columns=bo.columns)
-                    alt.index.name = "Alternativa"
-                set_inputs(crit_df, dms_df, bo, ow, alt, title=pm.get("title") or f"Análise de {up.name}",
-                           context=pm.get("context", ""), sector=pm.get("sector", ""))
+                prep = D.prepare_upload(D.read_uploaded(up), up.name)
+                set_inputs(prep["criteria"], prep["dms"], prep["bo"], prep["ow"], prep["alt"],
+                           title=prep["title"], context=prep["context"], sector=prep["sector"])
+                ss.upload_warnings = prep["warnings"]
+                bo = prep["bo"]
                 ss.last_upload = (up.name, up.size)
-                st.success(f"Lidos {bo.shape[0]} decisores e {bo.shape[1]} critérios.")
+                ss.upload_msg = f"Lidos {bo.shape[0]} decisores e {bo.shape[1]} critérios de «{up.name}»."
                 st.rerun()
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Não foi possível ler o ficheiro: {exc}")
@@ -258,6 +244,7 @@ dms = _clean_names(dm_edit["Decisor"])
 crit_types = {str(r["Critério"]).strip(): r["Tipo"] for _, r in crit_edit.dropna(subset=["Critério"]).iterrows()}
 crit_df_now = crit_edit.dropna(subset=["Critério"]).reset_index(drop=True)
 crit_df_now["Critério"] = crit_df_now["Critério"].astype(str).str.strip()
+crit_df_now = crit_df_now[crit_df_now["Critério"] != ""].reset_index(drop=True)
 def _txt(v) -> str:
     return "" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v).strip()
 

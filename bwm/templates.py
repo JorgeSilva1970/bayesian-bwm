@@ -64,6 +64,12 @@ def excel_template(crit_df: pd.DataFrame, dms_df: pd.DataFrame, bo: pd.DataFrame
     for col in ("Unidade", "Descrição"):
         if col not in crit_df:
             crit_df[col] = ""
+    crit_df["Critério"] = crit_df["Critério"].astype(str).str.strip()
+    crit_df = crit_df[(crit_df["Critério"] != "") & (crit_df["Critério"] != "nan")]
+    crit_df = crit_df[["Critério", "Tipo", "Unidade", "Descrição"]].fillna("").reset_index(drop=True)
+    dms_df = dms_df.copy()
+    dms_df["Decisor"] = dms_df["Decisor"].astype(str).str.strip()
+    dms_df = dms_df[(dms_df["Decisor"] != "") & (dms_df["Decisor"] != "nan")].reset_index(drop=True)
     criteria = crit_df["Critério"].astype(str).tolist()
     types = dict(zip(crit_df["Critério"], crit_df["Tipo"]))
     units = dict(zip(crit_df["Critério"], crit_df["Unidade"].fillna("")))
@@ -157,7 +163,8 @@ def excel_template(crit_df: pd.DataFrame, dms_df: pd.DataFrame, bo: pd.DataFrame
             ws.cell(row=r, column=2, value=kind)
             if mat is not None and dm in mat.index:
                 for j, c in enumerate(criteria, start=3):
-                    val = mat.loc[dm, c]
+                    val = mat.loc[dm, c] if c in mat.columns else None
+                    val = pd.to_numeric(val, errors="coerce")
                     ws.cell(row=r, column=j, value=None if pd.isna(val) else int(val))
             r += 1
     last = r - 1 + EXTRA_ROWS
@@ -200,7 +207,7 @@ def excel_template(crit_df: pd.DataFrame, dms_df: pd.DataFrame, bo: pd.DataFrame
         for name, row in alt.iterrows():
             ws.cell(row=r, column=1, value=str(name))
             for j, c in enumerate(criteria, start=2):
-                v = row.get(c)
+                v = pd.to_numeric(row.get(c), errors="coerce")
                 ws.cell(row=r, column=j, value=None if pd.isna(v) else float(v))
             r += 1
     last = max(r - 1, 2) + EXTRA_ROWS

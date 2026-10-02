@@ -349,6 +349,8 @@ def parse_long(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     ow = ow.loc[bo.index]
     bo.columns = [str(c).strip() for c in bo.columns]
     ow.columns = bo.columns
+    if any(c == "" for c in bo.columns):
+        raise ValueError("Há colunas de critérios sem nome na folha Comparacoes.")
     return bo.apply(pd.to_numeric, errors="coerce"), ow.apply(pd.to_numeric, errors="coerce")
 
 
@@ -424,6 +426,56 @@ def read_uploaded(file) -> dict:
         df = pd.read_csv(io.StringIO(text), sep=sep, decimal=dec)
         out["bo"], out["ow"] = parse_long(df)
     return out
+
+
+def prepare_upload(parsed: dict, filename: str = "") -> dict:
+    """
+    Converte o resultado de read_uploaded nas estruturas usadas pela app:
+    critérios (pela ordem das colunas de Comparacoes), decisores com função, matrizes, alternativas e meta.
+    """
+    bo, ow = parsed["bo"], parsed["ow"]
+    names = [str(c) for c in bo.columns]
+    warnings = []
+    crit_df = parsed.get("criteria")
+    if crit_df is not None:
+        crit_df = crit_df.copy()
+        crit_df["Critério"] = crit_df["Critério"].astype(str).str.strip()
+        missing = [c for c in names if c not in set(crit_df["Critério"])]
+        if missing:
+            warnings.append(f"Critérios sem linha na folha Criterios (assumidos como Benefício): {missing}")
+        extra = [c for c in crit_df["Critério"] if c and c not in names]
+        if extra:
+            warnings.append(f"Critérios da folha Criterios sem coluna em Comparacoes (ignorados): {extra}")
+        crit_df = crit_df.drop_duplicates("Critério").set_index("Critério").reindex(names)
+        crit_df.index.name = "Critério"
+        crit_df = crit_df.reset_index()
+        crit_df["Tipo"] = crit_df["Tipo"].fillna(BENEFICIO)
+        for col in ("Unidade", "Descrição"):
+            crit_df[col] = crit_df[col].fillna("") if col in crit_df else ""
+    else:
+        crit_df = pd.DataFrame({"Critério": names, "Tipo": BENEFICIO, "Unidade": "", "Descrição": ""})
+    crit_df = crit_df[CRIT_COLS]
+
+    fun = {}
+    if parsed.get("dms") is not None:
+        fun = dict(zip(parsed["dms"]["Decisor"], parsed["dms"]["Função"]))
+    dms_df = pd.DataFrame({"Decisor": list(bo.index), "Função": [fun.get(d, "") for d in bo.index]})
+
+    alt = parsed.get("alt")
+    if alt is not None:
+        alt = alt.copy()
+        alt.columns = [str(c).strip() for c in alt.columns]
+        miss_alt = [c for c in names if c not in alt.columns]
+        if miss_alt:
+            warnings.append(f"Alternativas sem coluna para: {miss_alt}")
+        alt = alt.reindex(columns=names).apply(pd.to_numeric, errors="coerce")
+        alt.index = [str(i).strip() for i in alt.index]
+        alt.index.name = "Alternativa"
+
+    pm = parsed.get("meta", {}) or {}
+    return {"criteria": crit_df, "dms": dms_df, "bo": bo, "ow": ow, "alt": alt,
+            "title": pm.get("title") or (f"Análise de {filename}" if filename else ""),
+            "context": pm.get("context", ""), "sector": pm.get("sector", ""), "warnings": warnings}
 
 
 def read_alternatives(file) -> pd.DataFrame:

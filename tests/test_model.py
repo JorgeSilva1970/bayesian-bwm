@@ -182,3 +182,35 @@ def test_ai_payload_is_json_and_report_includes_reading(example_result):
     html_ = R.html_report(b, offline=False).decode()
     assert "Leitura para o setor" in html_ and "<b>forte</b>" in html_ and "Setor X" in html_
     assert R.docx_report(b)[:2] == b"PK"
+
+
+# --- Regressão: importação de ficheiros pela app (erro KeyError: '') -----------
+
+
+@pytest.mark.parametrize("name", list(D.EXAMPLES))
+def test_prepare_upload_keeps_criteria_names(name):
+    ex = D.example_case(name)
+    xl = T.excel_template(ex["criteria"], ex["dms"], ex["bo"], ex["ow"], ex["alt"],
+                          {"title": "t", "sector": "s", "context": "c"})
+    prep = D.prepare_upload(D.read_uploaded(_Up(xl, "f.xlsx")), "f.xlsx")
+    assert prep["criteria"]["Critério"].tolist() == list(prep["bo"].columns)
+    assert (prep["criteria"]["Critério"] != "").all()
+    assert prep["criteria"]["Unidade"].tolist() == ex["criteria"]["Unidade"].tolist()
+    # o modelo Excel da barra lateral tem de ser gerado sem erros a partir dos dados importados
+    assert T.excel_template(prep["criteria"], prep["dms"], prep["bo"], prep["ow"], prep["alt"])[:2] == b"PK"
+
+
+def test_prepare_upload_criteria_sheet_in_other_order_and_missing():
+    ex = D.example_case()
+    crit = ex["criteria"].iloc[::-1].iloc[:-1]          # ordem invertida e um critério em falta
+    parsed = {"bo": ex["bo"], "ow": ex["ow"], "criteria": crit}
+    prep = D.prepare_upload(parsed, "x.xlsx")
+    assert prep["criteria"]["Critério"].tolist() == list(ex["bo"].columns)
+    assert prep["criteria"]["Tipo"].notna().all() and len(prep["warnings"]) == 1
+
+
+def test_template_ignores_blank_criteria_and_decisors():
+    ex = D.example_case()
+    crit = pd.concat([ex["criteria"], pd.DataFrame([{"Critério": "", "Tipo": "Benefício"}])], ignore_index=True)
+    dms = pd.concat([ex["dms"], pd.DataFrame([{"Decisor": None, "Função": ""}])], ignore_index=True)
+    assert T.excel_template(crit, dms, ex["bo"], ex["ow"], ex["alt"])[:2] == b"PK"
